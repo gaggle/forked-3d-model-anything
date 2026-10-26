@@ -37,7 +37,8 @@ async function run(prompt, opts) {
 }
 
 const COMMON = `You are one worker in a long, quality-first, ultra-realistic three.js reconstruction of a real room from an iPhone LiDAR scan plus posed photos.
-Repo: ${ROOT}. Room id: ${ROOM}. Read demos/${ROOM}/BRIEF.md first and follow it exactly: file ownership, measurement tools, unique CAP_SESSION/CAP_OUT per worker, the shared dev server you must never start or stop, and never leaving the TypeScript broken.`
+Repo: ${ROOT}. Room id: ${ROOM}. Read demos/${ROOM}/BRIEF.md first and follow it exactly: file ownership, measurement tools, unique CAP_SESSION/CAP_OUT per worker, the shared dev server you must never start or stop, and never leaving the TypeScript broken.
+Browser hygiene: each CAP_SESSION is a background agent-browser daemon with its own headless Chrome (1-2 GB). Use only the CAP_SESSION name(s) given to you, never invent extra ones, and before your final answer close every session you used: \`devenv shell -- agent-browser --session <name> close\`.`
 
 const GAP = {
   type: 'object',

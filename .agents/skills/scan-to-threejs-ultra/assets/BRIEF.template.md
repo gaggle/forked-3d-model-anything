@@ -36,6 +36,10 @@ Triangulate every object from at least two photos plus the LiDAR before committi
 devenv shell -- zsh -c 'CAP_URL=<cap-url> CAP_SESSION=<room>-<you> CAP_OUT=data/captures/<room>/<you> $S/cmp_photo.sh <room> 12 40 77'
 ```
 
+Each `CAP_SESSION` is a background agent-browser daemon with its own headless Chrome (1–2 GB). Use only
+the session name you were given, and close it before you finish:
+`devenv shell -- agent-browser --session <room>-<you> close`. Idle daemons exit after 10 minutes.
+
 Outputs `ph-<room>-N-cmp.jpg` (photo | model) and the uncropped `ph-<room>-N-model.png`. Inspect at
 full size and with PIL crops. `CAP_QUERY=areas=desk` renders only those areas plus the shell (`hideAreas=` to
 drop some). Free camera: `$S/cap.sh <name> 'room=<room>&src=model&cam=x,y,z&look=x,y,z&fov=60&size=1300x850'`.

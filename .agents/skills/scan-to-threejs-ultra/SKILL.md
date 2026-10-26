@@ -12,6 +12,34 @@ modeling) apply throughout and are not repeated here.
 
 `U` below is this skill's directory, `S` is `scan-to-threejs/scripts`. Run from the project root.
 
+## 0. Browser hygiene (required, for the whole run)
+
+Every capture session is a detached agent-browser daemon with its own headless Chrome (1–2 GB each
+with WebGL). They outlive the agent, workflow and Claude session that started them, and macOS
+attributes them to Claude; a long run that leaves them behind has filled 80 GB of memory. Prune
+continuously with `U/scripts/prune_browsers.py` (stdlib Python; run with `python3 -I`). It only
+touches daemons started from Claude and the Chrome trees agent-browser launched, never the user's
+own browser. Without `--kill` it only reports.
+
+- **Before** scaffolding, launching or resuming: `prune_browsers.py --kill --clean-profiles`. This
+  stops daemons whose launching Claude process is gone, daemons idle for over 15 minutes, and
+  Chrome trees whose daemon died. Report the memory it freed.
+- **During** the run: start a watchdog as a background Bash task and keep it running until the
+  workflow ends: `python3 -I U/scripts/prune_browsers.py --watch 300 --kill --idle 15`. A builder
+  that pauses rendering only pays a few seconds to restart its daemon. Read the watchdog's output
+  whenever you check progress. If it keeps finding orphans, the workers are not closing their
+  sessions: fix the prompt rather than raising `--idle`.
+- **After** the workflow finishes, is stopped or is paused, and before you end the turn: stop the
+  watchdog, then `prune_browsers.py --all --session-id "$CLAUDE_CODE_SESSION_ID" --kill --clean-profiles`.
+  Then run a plain report and confirm no Claude-started daemon or Chrome is left. Use `--all` without
+  `--session-id` only when no other Claude session is rendering.
+- New daemons exit by themselves after 10 idle minutes (`AGENT_BROWSER_IDLE_TIMEOUT_MS` in
+  `S/capture_env.sh`; daemons started before that keep agent-browser's 1-hour default). Workers close
+  their own sessions before answering (workflow prompt, BRIEF). The watchdog is the backstop for
+  agents that crash, get stopped or are cut off.
+- Other sessions' daemons are alive while their `CLAUDE_PID` runs and they render. Leave them, or
+  pass `--keep name,…` for a long pause you know about. Never `pkill` Chrome or agent-browser broadly.
+
 ## 1. Unpack and scaffold (orchestrator, inline)
 
 1. Unzip into a new folder under `data/captures-in/<room-id>/` (ignored input). Find the session folder
@@ -68,16 +96,18 @@ What it does, per area and without barriers between areas:
    completeness reviewer hunts missed or wrong separations.
 
 `maxConcurrent` caps agents (each runs its own headless WebGL renderer) so the machine stays usable;
-raise it only on a machine with headroom. Ask the app to keep the computer awake for the run.
+raise it only on a machine with headroom. Ask the app to keep the computer awake for the run, and
+start the pruning watchdog (section 0) alongside the workflow.
 
 ## 4. While it runs, and after
 
 - Do not edit area files while builders own them. If a builder reports a request for an orchestrator
   file (`index.ts`, `part.ts`, `dims.ts`), apply it between rounds.
-- Interrupted (crash, quit)? Restart the dev server, check the TypeScript, and resume with
+- Interrupted (crash, quit)? Prune first (`prune_browsers.py --kill --clean-profiles`: the dead run's
+  daemons are orphans now), restart the dev server and the watchdog, check the TypeScript, and resume with
   `Workflow({ scriptPath, resumeFromRunId })`: finished agents return cached results; agents that were
   mid-task restart from the files as they are on disk.
-- When it finishes: delete `areas/placeholders.ts` once no RoomPlan box remains needed, run
+- When it finishes: run the end-of-run prune (section 0), delete `areas/placeholders.ts` once no RoomPlan box remains needed, run
   `npm run build`, check the viewer (Rebuilt / Scan / Overlay, walk, cutaway) and the console, and
   render a final set of matched pairs across the room. Report the per-area scores, the item count from
   separation, what is measured vs approximate, the remaining gaps, and send the comparison sheet.
