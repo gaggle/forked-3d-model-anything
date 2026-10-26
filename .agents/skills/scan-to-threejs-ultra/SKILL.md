@@ -74,7 +74,7 @@ Load the `workflow-authoring` skill, then run the bundled script:
 Workflow({ scriptPath: "<U>/scripts/workflow.js", args: {
   root: "<abs project root>", room: "<id>",
   areas: [{ key: "shell", what: "…", photos: [..] }, { key: "bed", what: "…every object in it…", photos: [..] }, …],
-  maxRounds: 5, target: 8.5, objectBatch: 5, roomRounds: 3, separate: true, maxConcurrent: 8 } })
+  maxRounds: 5, target: 8.5, minGain: 0.5, patience: 1, objectBatch: 5, roomRounds: 3, separate: true, maxConcurrent: 8 } })
 ```
 
 What it does, per area and without barriers between areas:
@@ -85,9 +85,14 @@ What it does, per area and without barriers between areas:
    reviewers (geometry, surfaces, completeness) and fit-and-finish reviewers (one per `objectBatch`
    objects, each comparing every object against its own photo pairs) report verified gaps with
    evidence. Gaps go back to the builder. Repeats until the worst score ≥ `target` with no major gap
-   (minimum two rounds, at most `maxRounds`).
+   (minimum two rounds, at most `maxRounds`), or until the area plateaus: `patience` rounds in a row
+   where the worst score didn't rise by ≥ `minGain` over its best and the major-gap count didn't drop
+   below its fewest. Reviewer scores often stall well short of the target (soft goods and materials
+   especially); each extra round costs ~30 min, so a plateaued area hands its remaining gaps to the
+   whole-room phase instead. Raise `patience` to 2 for a longer, more exhaustive run.
 3. **Whole-room critique** — composition, least-realistic-photos and unowned-objects critics; owning
-   areas fix and are re-reviewed; repeats until no major gap or `roomRounds`.
+   areas fix and are re-reviewed; repeats until no major gap, `roomRounds`, or a round whose critics
+   find no fewer major gaps than an earlier round (plateau).
 4. **Separation** (once fidelity is final) — each standalone thing becomes its own top-level object
    with `userData.item` (`ItemTag` in `part.ts`: id, label, restsOn, confidence, photos) and
    `userData.physics` (`packages/room-physics/tagging.ts`): furniture that nothing is fused to, each

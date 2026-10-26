@@ -10,14 +10,19 @@ export const meta = {
   ],
 }
 
-// args: { root, room, areas: [{ key, what, photos?: number[] }], maxRounds?, target?, objectBatch?,
-//         roomRounds?, separate?, maxConcurrent? }
+// args: { root, room, areas: [{ key, what, photos?: number[] }], maxRounds?, target?, minGain?, patience?,
+//         objectBatch?, roomRounds?, separate?, maxConcurrent? }
 // Area 'shell' owns demos/<room>/shell.ts; every other area owns demos/<room>/areas/<key>.ts.
 const A = args || {}
 if (!A.root || !A.room || !Array.isArray(A.areas) || !A.areas.length) throw new Error('args need root, room and areas[]')
 const ROOT = A.root, ROOM = A.room
 const MAX_ROUNDS = A.maxRounds ?? 5
 const TARGET = A.target ?? 8.5
+// Plateau stop: a round counts as progress if the worst score rose by ≥ MIN_GAIN over the best so far or
+// the major-gap count fell below the fewest so far. After PATIENCE rounds without progress the area stops
+// short of the target: more rounds of the same builder rarely move a stalled score, and they cost ~30 min each.
+const MIN_GAIN = A.minGain ?? 0.5
+const PATIENCE = A.patience ?? 1
 const OBJECT_BATCH = A.objectBatch ?? 5
 const ROOM_ROUNDS = A.roomRounds ?? 3
 const SEPARATE = A.separate ?? true
@@ -136,6 +141,7 @@ const areaResults = await pipeline(
     inv = inv && inv.objects.length ? inv : { objects: [{ id: a.key, label: a.key, photos: a.photos, notes: a.what }] }
     let gaps = []
     const rounds = []
+    let best = -Infinity, fewest = Infinity, stale = 0, stop = 'max rounds'
     for (let round = 1; round <= MAX_ROUNDS; round++) {
       const summary = await run(buildPrompt(a, inv, round, gaps), { label: `build:${a.key}:r${round}`, phase: 'Build & review' })
       const rev = await review(a, inv, round)
@@ -143,10 +149,14 @@ const areaResults = await pipeline(
       rounds.push({ round, score: rev.score, majors, gaps: rev.gaps.length, summary })
       log(`${a.key} r${round}: score ${rev.score}, ${majors} major / ${rev.gaps.length} gaps`)
       gaps = rev.gaps
-      if (round >= 2 && rev.score >= TARGET && !majors) break
+      const progress = rev.score >= best + MIN_GAIN || majors < fewest
+      stale = progress ? 0 : stale + 1
+      best = Math.max(best, rev.score); fewest = Math.min(fewest, majors)
+      if (round >= 2 && rev.score >= TARGET && !majors) { stop = 'target'; break }
+      if (round >= 2 && stale >= PATIENCE) { stop = 'plateau'; log(`${a.key}: no progress for ${stale} round(s) at ${rev.score}, stopping short of ${TARGET}`); break }
     }
     state[a.key] = { inv, remaining: gaps }
-    return { area: a.key, objects: inv.objects.length, rounds }
+    return { area: a.key, objects: inv.objects.length, stop, rounds }
   },
 )
 
@@ -162,6 +172,7 @@ const CRITICS = [
   'Unowned things: list every object or surface visible in the photos that no area models well (check each photo systematically), and assign each to the most suitable area.',
 ]
 const roomLog = []
+let fewestRoomMajors = Infinity
 for (let r = 1; r <= ROOM_ROUNDS; r++) {
   const found = (await parallel(CRITICS.map((t, i) => () => run(`${COMMON}\n\nADVERSARIAL WHOLE-ROOM CRITIC (do not edit source), round ${r}. ${t} Use ${capFor(`room-critic-${r}-${i}`)}. Assign each gap to the area that owns the fix (BRIEF.md ownership).`, { label: `room-critic:${i}:r${r}`, phase: 'Whole-room critique', schema: ROOM_GAPS }))))
     .filter(Boolean).flatMap((c) => c.gaps)
@@ -178,6 +189,9 @@ for (let r = 1; r <= ROOM_ROUNDS; r++) {
   }))
   roomLog.push({ round: r, gaps: found.length, majors, after: fixes.filter(Boolean) })
   if (!majors) break
+  // critics finding as many major gaps as before means the fixes aren't landing: stop (same plateau rule)
+  if (majors >= fewestRoomMajors) { log(`whole-room: ${majors} major gaps, no fewer than before; stopping`); break }
+  fewestRoomMajors = majors
 }
 
 // Separation: standalone items become their own tagged objects, with no visual change
