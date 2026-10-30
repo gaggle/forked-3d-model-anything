@@ -47,6 +47,25 @@ export interface BuiltRoom {
   optimize?(opts?: { static?: boolean }): { meshesBefore: number; meshesAfter: number; batches: number } | void;
   /** posed reference photos (House Capture bundles), in room coordinates */
   photos?: PhotoPose[];
+  /**
+   * Named parts of the room the viewer can show/hide one by one (toggles `visible`). Leave out
+   * `optimize` (or keep these objects out of its merge) so the objects survive as themselves.
+   */
+  areas?: RoomArea[];
+  /** axis-aligned spaces worth sizing (e.g. a closet's clear interior), shown by the viewer's Inspect mode */
+  volumes?: RoomVolume[];
+}
+
+export interface RoomVolume {
+  label: string;
+  min: [number, number, number];
+  max: [number, number, number];
+}
+
+export interface RoomArea {
+  key: string;
+  label: string;
+  objects: THREE.Object3D[];
 }
 
 /** GTAO tuning (see GTAOPass.updateGtaoMaterial); intensity = blend strength */

@@ -1,6 +1,7 @@
 import { appURL } from './asset-base';
 import { collectInventory, showKnolling, stopKnolling } from './knolling';
 import { showLayout } from './layout';
+import { createInspector } from './inspect';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
@@ -69,6 +70,18 @@ const invalidate = () => { dirty = true; requestFrame(); };
 THREE.DefaultLoadingManager.onLoad = invalidate;
 orbit.addEventListener('change', invalidate);
 walk.addEventListener('change', invalidate);
+const inspector = createInspector({
+  canvas, camera, room: () => room, pickables, invalidate, requestFrame,
+  pivot: point => moveCamera(camera.position.clone(), point),
+});
+/** the camera rig of the current 3D view: Dollhouse orbits, Inspect tumbles freely */
+const controls = () => (mode === 'inspect' ? inspector.controls : orbit);
+const orbiting = () => mode === 'orbit' || mode === 'inspect';
+function pickables() {
+  const meshes: THREE.Object3D[] = [];
+  for (const root of [room?.group, reference]) root?.traverseVisible(o => { if ((o as THREE.Mesh).isMesh) meshes.push(o); });
+  return meshes;
+}
 // Preserve full resolution for a settled view; spend fewer pixels while navigating.
 let movingRatio = Math.min(window.devicePixelRatio, 1);
 let lastMotion = -Infinity;
@@ -183,6 +196,7 @@ async function loadRoom(id: string, updated?: RoomModule) {
   reference = undefined;
   referenceLoading = undefined;
   referenceEpoch++;
+  const firstRoom = !activeRoomId;
   room = next;
   activeRoomId = mod.id;
   transition = undefined;
@@ -197,6 +211,7 @@ async function loadRoom(id: string, updated?: RoomModule) {
   if (room?.referenceAvailable === false && (source === 'scan' || source === 'overlay')) source = 'model';
   orbit.maxDistance = mod.id === 'house' ? 80 : 30;
   collectInventory(room);
+  showAreas(room);
   room.optimize?.({ static: true });
   if (mode !== 'layout' && mode !== 'knolling' && !['layout', 'knolling'].includes(new URLSearchParams(location.search).get('view') ?? '')) await prepareRendering();
   if (request !== roomRequest) { releaseReplaced(); return; }
@@ -206,9 +221,10 @@ async function loadRoom(id: string, updated?: RoomModule) {
   if (mode === 'layout' && !room.layout) setMode('orbit');
   clearDamping();
   camera.position.copy(homePosition());
-  orbit.target.set(...room.camera.target);
+  controls().target.set(...room.camera.target);
   restoreLiveView(mod.id);
-  orbit.update();
+  controls().update();
+  inspector.setRoom(!!updated || firstRoom);
   activate('room', mod.id);
   statusEl.textContent = mod.label;
   const url = new URL(location.href);
@@ -313,7 +329,7 @@ async function setSource(next: Source, force = false) {
 
 // --- Navigation modes ------------------------------------------------------
 
-type Mode = 'orbit' | 'walk' | 'layout' | 'knolling';
+type Mode = 'orbit' | 'inspect' | 'walk' | 'layout' | 'knolling';
 let mode: Mode = 'orbit';
 const savedOrbit = { position: new THREE.Vector3(), target: new THREE.Vector3() };
 
@@ -324,6 +340,7 @@ function setMode(next: Mode) {
   walkVelocity.set(0, 0);
   clearDamping();
   if (next === 'walk') toggleControls(false);
+  const fromTarget = controls().target.clone();
   const previous = mode;
   mode = next;
   layoutHost.hidden = mode !== 'layout';
@@ -338,9 +355,10 @@ function setMode(next: Mode) {
   url.searchParams.set('view', mode);
   history.replaceState(null, '', url);
 
+  if (previous === 'inspect') { inspector.disable(); orbit.target.copy(fromTarget); }
   if (mode === 'walk') {
     savedOrbit.position.copy(camera.position);
-    savedOrbit.target.copy(orbit.target);
+    savedOrbit.target.copy(fromTarget);
     orbit.enabled = false;
     camera.position.set(...room.camera.walk);
     camera.lookAt(...room.camera.walkLook);
@@ -352,17 +370,48 @@ function setMode(next: Mode) {
       camera.position.copy(savedOrbit.position);
       orbit.target.copy(savedOrbit.target);
     }
-    orbit.enabled = true;
-    orbit.update();
+    orbit.enabled = mode !== 'inspect';
+    if (mode === 'inspect') inspector.enable(orbit.target);
+    controls().update();
   }
 
   if (mode !== 'layout' && mode !== 'knolling') void prepareRendering();
-  navigation.hidden = mode !== 'orbit';
+  navigation.hidden = !orbiting();
   activate('mode', mode);
   invalidate();
   hud.querySelectorAll<HTMLElement>('.help').forEach((el) => {
     el.hidden = el.dataset.for !== mode;
   });
+}
+
+const areasSection = document.querySelector<HTMLElement>('#areas')!;
+const areaList = areasSection.querySelector<HTMLDivElement>('.area-list')!;
+function showAreas(r: BuiltRoom) {
+  areaList.replaceChildren();
+  areasSection.hidden = !r.areas?.length;
+  const buttons = (r.areas ?? []).map((area) => {
+    const b = document.createElement('button');
+    b.textContent = area.label;
+    const sync = () => { const on = area.objects.some(o => o.visible); b.classList.toggle('active', on); b.setAttribute('aria-pressed', String(on)); };
+    b.addEventListener('click', () => { const on = !area.objects.some(o => o.visible); area.objects.forEach(o => { o.visible = on; }); sync(); saveAreas(); invalidate(); });
+    sync();
+    return { b, sync, area };
+  });
+  if (buttons.length > 1) {
+    const all = document.createElement('button');
+    all.textContent = 'Show all';
+    all.addEventListener('click', () => { buttons.forEach(({ area, sync }) => { area.objects.forEach(o => { o.visible = true; }); sync(); }); saveAreas(); invalidate(); });
+    buttons.push({ b: all, sync: () => {}, area: { key: '', label: '', objects: [] } });
+  }
+  areaList.append(...buttons.map(x => x.b));
+  // the room module reads ?areas= when it builds, so a copied view link keeps the same parts hidden
+  function saveAreas() {
+    const shown = (r.areas ?? []).filter(a => a.objects.some(o => o.visible)).map(a => a.key);
+    const url = new URL(location.href);
+    if (shown.length === r.areas!.length) url.searchParams.delete('areas');
+    else url.searchParams.set('areas', shown.join(',') || 'none');
+    history.replaceState(null, '', url);
+  }
 }
 
 function activate(group: 'source' | 'mode' | 'room', value: string) {
@@ -409,7 +458,7 @@ window.addEventListener('keydown', (e) => {
     keys.add(e.code);
     requestFrame();
   }
-  if (mode !== 'orbit') return;
+  if (!orbiting()) return;
   const views: Record<string, View> = { Home: 'home', Digit1: 'home', Digit2: 'top', Digit3: 'front', Digit4: 'side' };
   if (views[e.code]) { e.preventDefault(); preset(views[e.code]); }
   if (e.code === 'Equal' || e.code === 'Minus') { e.preventDefault(); zoom(e.code === 'Equal' ? 0.8 : 1.25); }
@@ -460,7 +509,7 @@ function clearDamping() {
 function moveCamera(position: THREE.Vector3, target: THREE.Vector3) {
   clearDamping();
   transition = { start: performance.now(), from: camera.position.clone(), to: position,
-    fromTarget: orbit.target.clone(), toTarget: target };
+    fromTarget: controls().target.clone(), toTarget: target };
   invalidate();
 }
 function homePosition() {
@@ -468,7 +517,7 @@ function homePosition() {
   return new THREE.Vector3(...room!.camera.orbit).sub(target).multiplyScalar(Math.max(1, 1.18 / camera.aspect)).add(target);
 }
 function preset(view: View) {
-  if (!room || mode !== 'orbit') return;
+  if (!room || !orbiting()) return;
   const target = new THREE.Vector3(...room.camera.target);
   const home = homePosition();
   const distance = home.distanceTo(target);
@@ -476,26 +525,25 @@ function preset(view: View) {
   moveCamera(view === 'home' ? home : directions[view].normalize().multiplyScalar(distance).add(target), target);
 }
 function zoom(factor: number) {
-  if (mode !== 'orbit') return;
-  const offset = camera.position.clone().sub(orbit.target);
+  if (!orbiting()) return;
+  const target = controls().target;
+  const offset = camera.position.clone().sub(target);
   offset.setLength(THREE.MathUtils.clamp(offset.length() * factor, orbit.minDistance, orbit.maxDistance));
-  moveCamera(orbit.target.clone().add(offset), orbit.target.clone());
+  moveCamera(target.clone().add(offset), target.clone());
 }
 navigation.querySelectorAll<HTMLButtonElement>('[data-view]').forEach(button => {
   button.addEventListener('click', () => preset(button.dataset.view as View));
 });
 navigation.querySelector<HTMLButtonElement>('[data-zoom=in]')!.addEventListener('click', () => zoom(0.8));
 navigation.querySelector<HTMLButtonElement>('[data-zoom=out]')!.addEventListener('click', () => zoom(1.25));
-orbit.addEventListener('start', () => { transition = undefined; lastMotion = performance.now(); requestFrame(); });
+for (const rig of [orbit, inspector.controls]) rig.addEventListener('start', () => { transition = undefined; lastMotion = performance.now(); requestFrame(); });
 canvas.addEventListener('pointerdown', () => canvas.focus({ preventScroll: true }));
 const raycaster = new THREE.Raycaster();
 canvas.addEventListener('dblclick', event => {
-  if (!room || mode !== 'orbit') return;
+  if (!room || !orbiting()) return;
   const rect = canvas.getBoundingClientRect();
   raycaster.setFromCamera(new THREE.Vector2((event.clientX - rect.left) / rect.width * 2 - 1, -(event.clientY - rect.top) / rect.height * 2 + 1), camera);
-  const meshes: THREE.Object3D[] = [];
-  for (const root of [room.group, reference]) root?.traverseVisible(o => { if ((o as THREE.Mesh).isMesh) meshes.push(o); });
-  const hit = raycaster.intersectObjects(meshes, false)[0];
+  const hit = raycaster.intersectObjects(pickables(), false)[0];
   if (!hit) return;
   const offset = camera.position.clone().sub(hit.point);
   offset.setLength(THREE.MathUtils.clamp(offset.length() * 0.65, 0.6, orbit.maxDistance));
@@ -516,14 +564,22 @@ qualitySelect.addEventListener('change', () => {
 const cameraCoordinates = document.querySelector<HTMLOutputElement>('#camera-coordinates')!;
 const cameraLink = document.querySelector<HTMLInputElement>('#camera-link')!;
 const cameraCopyStatus = document.querySelector<HTMLElement>('#camera-copy-status')!;
+// The address bar follows the settled camera, so copying it straight from there also works.
+// Only after start-up restored the link's own camera, or the loading view would replace it.
+let cameraInURL = false;
+function saveCameraURL() {
+  if (!cameraInURL || !room || !orbiting()) return;
+  updateCameraHelper();
+  if (location.href !== cameraLink.value) history.replaceState(null, '', cameraLink.value);
+}
 function updateCameraHelper() {
-  if (!room || mode !== 'orbit') return;
-  const values = [...camera.position.toArray(), ...orbit.target.toArray(), camera.fov].map(n => Number(n.toFixed(5)));
+  if (!room || !orbiting()) return;
+  const values = [...camera.position.toArray(), ...controls().target.toArray(), camera.fov].map(n => Number(n.toFixed(5)));
   const coordinates = `Position (m)\n${values.slice(0,3).join(', ')}\nLooking at (m)\n${values.slice(3,6).join(', ')}`;
   if (cameraCoordinates.textContent !== coordinates) cameraCoordinates.textContent = coordinates;
   const url = new URL(location.href);
   url.searchParams.set('room', activeRoomId);
-  url.searchParams.set('view', 'orbit');
+  url.searchParams.set('view', mode);
   url.searchParams.set('camera', values.join(','));
   if (cameraLink.value !== url.href) {
     cameraLink.value = url.href;
@@ -550,17 +606,17 @@ function restoreCameraLink() {
   const target = new THREE.Vector3(...values.slice(3,6));
   if (position.distanceTo(target) < orbit.minDistance || position.distanceTo(target) > orbit.maxDistance) return;
   clearDamping();
-  camera.position.copy(position); orbit.target.copy(target);
-  camera.fov = values[6]; camera.updateProjectionMatrix(); orbit.update(); invalidate();
+  camera.position.copy(position); controls().target.copy(target);
+  camera.fov = values[6]; camera.updateProjectionMatrix(); controls().update(); invalidate();
 }
 
 // Keep the recorded angle across development rebuilds. Each room has its own
 // session-only camera; a broken/stale entry must never prevent a room loading.
 function saveLiveView() {
-  if (!import.meta.env.DEV || !room || mode !== 'orbit' ) return;
+  if (!import.meta.env.DEV || !room || !orbiting()) return;
   try {
     sessionStorage.setItem(`room-viewer:live:${activeRoomId}`, JSON.stringify({
-      position: camera.position.toArray(), target: orbit.target.toArray(), quality,
+      position: camera.position.toArray(), target: controls().target.toArray(), quality,
     }));
   } catch { /* Private browsing can disable storage. */ }
 }
@@ -572,7 +628,7 @@ function restoreLiveView(id: string) {
       && v.every(n => typeof n === 'number' && Number.isFinite(n) && Math.abs(n) < 1000);
     if (!valid(saved?.position) || !valid(saved?.target)) return;
     camera.position.fromArray(saved.position);
-    orbit.target.fromArray(saved.target);
+    controls().target.fromArray(saved.target);
     if (['auto', 'detail', 'fast'].includes(saved.quality)) {
       quality = saved.quality;
       qualitySelect.value = quality;
@@ -596,10 +652,10 @@ function renderFrame(time: number) {
     const progress = reducedMotion.matches ? 1 : Math.min(1, (time - transition.start) / 350);
     const eased = 1 - Math.pow(1 - progress, 3);
     camera.position.lerpVectors(transition.from, transition.to, eased);
-    orbit.target.lerpVectors(transition.fromTarget, transition.toTarget, eased);
-    orbit.update();
+    controls().target.lerpVectors(transition.fromTarget, transition.toTarget, eased);
+    controls().update();
     if (progress === 1) transition = undefined;
-  } else orbit.update();
+  } else controls().update();
   updateCameraHelper();
   const moved = renderedPosition.distanceToSquared(camera.position) > 1e-10
     || 1 - Math.abs(renderedRotation.dot(camera.quaternion)) > 1e-10;
@@ -620,17 +676,18 @@ function renderFrame(time: number) {
   if (pipeline.ao !== effects) { pipeline.ao = effects; dirty = true; }
   if (dirty || moved) {
     updateCutaway();
-    updateCameraDepth(camera, roomBounds, mode === 'orbit' && (source === 'model' || source === 'wireframe'));
+    updateCameraDepth(camera, roomBounds, orbiting() && (source === 'model' || source === 'wireframe'));
     if (source === 'wireframe') renderWireframe();
     else pipeline.render();
+    inspector.render(renderer);
     renderedFrames++;
     renderedPosition.copy(camera.position);
     renderedRotation.copy(camera.quaternion);
     dirty = false;
   }
   lastFrame = moving ? time : 0;
-  if (moving || transition || (mode === 'walk' && walk.isLocked && walkVelocity.lengthSq() > 0)) requestFrame();
-  else { previousTime = 0; saveLiveView(); }
+  if (moving || transition || inspector.busy || (mode === 'walk' && walk.isLocked && walkVelocity.lengthSq() > 0)) requestFrame();
+  else { previousTime = 0; saveLiveView(); saveCameraURL(); }
 }
 
 document.addEventListener('visibilitychange', () => {
@@ -662,8 +719,12 @@ await loadRoom(new URLSearchParams(location.search).get('room') ?? ROOMS[0].id);
 
 const initialView = new URLSearchParams(location.search).get('view');
 if (initialView === 'layout' || initialView === 'knolling') setMode(initialView);
-else restoreCameraLink();
+else {
+  if (initialView === 'inspect') setMode('inspect');
+  restoreCameraLink();
+}
 updateCameraHelper();
+cameraInURL = true;
 
 if (import.meta.env.DEV) Object.assign(window, { __viewer: { renderer, scene, camera, pipeline, orbit,
   get room() { return room; }, get stats() { return { renderedFrames, pendingFrame, movingRatio, quality }; } } });

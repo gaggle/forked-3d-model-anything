@@ -23,6 +23,7 @@
           <h2>View</h2>
           <div class="buttons mode-grid" data-group="mode" aria-label="Viewing mode">
             <button data-mode="orbit" class="active" aria-pressed="true">Dollhouse</button>
+            <button data-mode="inspect" aria-pressed="false" title="Tumble freely around a clicked point and measure">Inspect</button>
             <button data-mode="layout" aria-pressed="false">Layout</button>
             <button data-mode="knolling" aria-pressed="false">Knolling</button>
             <button data-mode="walk" aria-pressed="false">Walk around</button>
@@ -36,6 +37,20 @@
             <button data-source="overlay" aria-pressed="false">Overlay</button>
             <button data-source="wireframe" aria-pressed="false">Wireframe</button>
           </div>
+        </section>
+        <section class="control-section" id="inspect-panel" hidden aria-label="Inspect and measure">
+          <h2>Inspect <span class="section-note">Model sizes, ≈ ±1 cm</span></h2>
+          <div class="buttons segmented tool-switch" aria-label="Click tool">
+            <button data-tool="pivot" class="active" aria-pressed="true" title="Click sets the rotation point">Pivot</button>
+            <button data-tool="tape" aria-pressed="false" title="Click two points to measure (T)">Tape</button>
+          </div>
+          <label class="check"><input type="checkbox" id="show-volumes" checked> Show room volumes</label>
+          <div class="measure-list" hidden></div>
+          <button id="clear-measures" type="button" hidden>Clear measurements</button>
+        </section>
+        <section class="control-section" id="areas" hidden>
+          <h2>Areas <span class="section-note">Show or hide parts</span></h2>
+          <div class="buttons mode-grid area-list" aria-label="Room areas"></div>
         </section>
         <section class="control-section" id="navigation" aria-label="Camera views">
           <h2>Camera</h2>
@@ -63,6 +78,7 @@
         <div class="sidebar-footer">
           <button class="play-link" title="Walk around and grab / throw things (physics)">Enter playground <span aria-hidden="true">↗</span></button>
           <p class="help" data-for="orbit">Drag to orbit · Scroll to zoom<br>Right-drag / two fingers to pan<br>Double-click to focus</p>
+          <p class="help" data-for="inspect" hidden>Click to set the pivot · Drag to orbit, over and under<br>Right-drag to pan · Scroll to zoom<br>Hover for sizes · Shift-click to pin<br>[ / ] bigger / smaller part · T tape</p>
           <p class="help" data-for="layout" hidden>Drag to pan · Scroll to zoom<br>Double-click to fit</p>
           <p class="help" data-for="walk" hidden>Mouse to look · WASD to move<br>Shift to run · Esc to exit</p>
         </div>
